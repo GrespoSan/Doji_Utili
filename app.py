@@ -1,123 +1,68 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+from datetime import date
 
-# --------------------------------------------------
-# CONFIG STREAMLIT
-# --------------------------------------------------
-st.set_page_config(
-    page_title="Doji + Earnings Screener Italia",
-    layout="wide"
-)
+# Configurazione Pagina
+st.set_page_config(page_title="Doji Scanner - Yesterday Only", layout="wide")
 
-st.title("📊 Screener Pseudo-Doji – Italia")
-st.write(
-    "Mostra tutte le pseudo-doji dell'ultima candela disponibile per titoli italiani "
-    "anche se Yahoo non riporta earnings."
-)
+st.title("📊 Scanner Doji: Sessione Precedente")
+st.write("Il sistema analizzerà solo la candela dell'ultima giornata di contrattazione conclusa.")
 
-# --------------------------------------------------
-# SIDEBAR
-# --------------------------------------------------
-st.sidebar.header("📎 Input")
-uploaded_file = st.sidebar.file_uploader(
-    "Carica file .txt con ticker (uno per riga)", type=["txt"]
-)
-show_debug = st.sidebar.checkbox("Mostra DEBUG dettagliato", value=True)
+# --- Funzione Identificazione Doji ---
+def is_doji(open_p, high, low, close, threshold=0.1):
+    body = abs(open_p - close)
+    total_range = high - low
+    if total_range == 0: return False
+    return body <= (total_range * threshold)
 
-if not uploaded_file:
-    st.warning("⬅️ Carica un file .txt con i ticker")
-    st.stop()
+# --- Caricamento File ---
+uploaded_file = st.file_uploader("Carica file .txt con i ticker", type="txt")
 
-tickers = uploaded_file.read().decode("utf-8").splitlines()
-tickers = [t.strip().upper() for t in tickers if t.strip()]
+if uploaded_file is not None:
+    tickers = [line.decode("utf-8").strip().upper() for line in uploaded_file]
+    
+    if st.button("Analizza Candele di Ieri"):
+        results = []
+        progress_bar = st.progress(0)
+        today = date.today()
 
-# --------------------------------------------------
-# FUNZIONE PSEUDO-DOJI
-# --------------------------------------------------
-def classify_doji(row):
-    o, c, h, l = row["Open"], row["Close"], row["High"], row["Low"]
-    body = abs(c - o)
-    rng = h - l
-    if rng == 0:
-        return None, None
-    upper = h - max(o, c)
-    lower = min(o, c) - l
-    body_pct = body / rng
-    upper_pct = upper / rng
-    lower_pct = lower / rng
+        for i, ticker in enumerate(tickers):
+            try:
+                # Scarichiamo gli ultimi 7 giorni per coprire i weekend
+                df = yf.download(ticker, period="7d", interval="1d", progress=False)
+                
+                if not df.empty and len(df) >= 2:
+                    # Controlliamo se l'ultima riga è 'oggi'
+                    last_row_date = df.index[-1].date()
+                    
+                    if last_row_date == today:
+                        # Se l'ultima è oggi, prendiamo la penultima (ieri)
+                        target_candle = df.iloc[-2]
+                    else:
+                        # Se l'ultima non è oggi (es. è sabato), l'ultima è quella valida
+                        target_candle = df.iloc[-1]
+                    
+                    o, h, l, c = target_candle['Open'], target_candle['High'], target_candle['Low'], target_candle['Close']
+                    
+                    if is_doji(o, h, l, c):
+                        results.append({
+                            "Ticker": ticker,
+                            "Data Analizzata": target_candle.name.strftime('%Y-%m-%d'),
+                            "Open": round(float(o), 4),
+                            "High": round(float(h), 4),
+                            "Low": round(float(l), 4),
+                            "Close": round(float(c), 4),
+                            "Corpo %": f"{round((abs(o-c)/(h-l if h-l !=0 else 1))*100, 2)}%"
+                        })
+            except Exception as e:
+                st.error(f"Errore su {ticker}: {e}")
+            
+            progress_bar.progress((i + 1) / len(tickers))
 
-    # Super-permissiva: corpo piccolo ≤50% del range
-    if body_pct <= 0.5:
-        return "Pseudo-Doji", (body_pct, upper_pct, lower_pct)
-    return None, None
-
-# --------------------------------------------------
-# SCREENING
-# --------------------------------------------------
-results = []
-
-with st.spinner("🔍 Screening pseudo-doji in corso..."):
-    for ticker in tickers:
-        try:
-            stock = yf.Ticker(ticker)
-            df = stock.history(period="10d", interval="1d")
-            if df.empty:
-                continue
-
-            # Prendi l'ultima candela disponibile
-            candle = df.iloc[-1]
-
-            doji_type, metrics = classify_doji(candle)
-            if not doji_type:
-                continue
-
-            body_pct, upper_pct, lower_pct = metrics
-
-            # Earnings (solo se disponibili)
-            cal = stock.calendar
-            earnings_date = None
-            if not cal.empty and "Earnings Date" in cal.index:
-                earnings_date = cal.loc["Earnings Date"].iat[0].date()
-
-            # TradingView link
-            tv_symbol = ticker.replace(".MI", "")
-            tv_link = f"https://www.tradingview.com/chart/?symbol=MIL:{tv_symbol}"
-
-            # Salvataggio risultati
-            results.append({
-                "Ticker": ticker,
-                "Doji Type": doji_type,
-                "Candle Date": candle.name.date(),
-                "Body %": round(body_pct, 2),
-                "Lower Shadow %": round(lower_pct, 2),
-                "Upper Shadow %": round(upper_pct, 2),
-                "Earnings": earnings_date,
-                "TradingView": tv_link
-            })
-
-            # DEBUG: ultimi 5 giorni per controllo visivo
-            if show_debug:
-                st.subheader(f"Ultimi 5 giorni: {ticker}")
-                st.dataframe(df.tail(5))
-
-        except Exception:
-            continue
-
-# --------------------------------------------------
-# OUTPUT
-# --------------------------------------------------
-if results:
-    df_res = pd.DataFrame(results)
-    st.success(f"✅ Trovate {len(df_res)} pseudo-doji")
-
-    st.dataframe(
-        df_res,
-        use_container_width=True,
-        column_config={
-            "TradingView": st.column_config.LinkColumn("TradingView")
-        }
-    )
-
-else:
-    st.info("Nessuna pseudo-doji trovata nei ticker caricati.")
+        # --- Visualizzazione ---
+        if results:
+            st.success(f"Trovate {len(results)} candele simili a Doji per l'ultima sessione conclusa.")
+            st.dataframe(pd.DataFrame(results), use_container_width=True)
+        else:
+            st.info("Nessuna Doji trovata per i ticker selezionati.")
