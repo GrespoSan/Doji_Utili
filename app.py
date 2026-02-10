@@ -1,32 +1,32 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, date
 
 # Configurazione Pagina
-st.set_page_config(page_title="Doji Scanner Pro", layout="wide")
+st.set_page_config(page_title="Doji & Earnings Scanner", layout="wide")
 
-st.title("🎯 Doji Scanner - Analisi 'Ieri'")
+st.title("🎯 Doji Scanner + Earnings Oggi")
 st.markdown("""
-Questo strumento analizza la **candela precedente a quella di oggi**. 
-* **Supporta liste separate da virgola, spazi o accapo.**
-* Usa lo **slider** laterale per regolare la sensibilità (consigliato 0.20 per titoli come RACE).
+Questo strumento cerca candele di indecisione (Doji) nella sessione di **ieri**.
+* **Filtro Earnings:** Se attivato, mostra solo le aziende che rilasciano gli utili **OGGI**.
 """)
 
 # --- Sidebar ---
 with st.sidebar:
-    st.header("⚙️ Impostazioni")
+    st.header("⚙️ Impostazioni Grafiche")
     threshold = st.slider("Tolleranza Doji (Ratio Corpo/Range)", 
-                          min_value=0.01, max_value=0.50, value=0.20, step=0.01,
-                          help="0.1 = Doji stretta. 0.3 = Spinning Top.")
-    st.write(f"Soglia attuale: **{int(threshold*100)}%**")
+                          min_value=0.01, max_value=0.50, value=0.20, step=0.01)
+    
+    st.divider()
+    st.header("💰 Filtro Utili")
+    filter_earnings = st.checkbox("Mostra SOLO chi ha gli Earnings OGGI", value=True)
 
-# --- Funzione Analisi ---
-def analyze_ticker(ticker_symbol, threshold):
+# --- Funzione 1: Analisi Grafica (Doji) ---
+def analyze_ticker_pattern(ticker_obj, threshold):
     try:
-        # Scarica dati (5 giorni per sicurezza weekend)
-        ticker = yf.Ticker(ticker_symbol)
-        df = ticker.history(period="5d", interval="1d")
+        # Scarica dati (5 giorni per sicurezza)
+        df = ticker_obj.history(period="5d", interval="1d")
         
         if df.empty or len(df) < 2:
             return None
@@ -35,16 +35,14 @@ def analyze_ticker(ticker_symbol, threshold):
         last_date = df.index[-1].date()
         today_date = datetime.now().date()
         
-        # Se l'ultima candela è di OGGI, prendiamo la PENULTIMA (Ieri)
         if last_date == today_date:
-            target_row = df.iloc[-2]
+            target_row = df.iloc[-2] # Ieri
             target_date = df.index[-2].date()
         else:
-            # Se l'ultima è vecchia (es. ieri sera o venerdì), prendiamo l'ULTIMA
-            target_row = df.iloc[-1]
+            target_row = df.iloc[-1] # Ultima disponibile
             target_date = last_date
 
-        # Dati Numerici
+        # Calcoli Candela
         o = float(target_row['Open'])
         h = float(target_row['High'])
         l = float(target_row['Low'])
@@ -61,12 +59,9 @@ def analyze_ticker(ticker_symbol, threshold):
         is_doji = ratio <= threshold
 
         return {
-            "Ticker": ticker_symbol,
             "Data Candela": target_date,
             "Open": round(o, 3),
             "Close": round(c, 3),
-            "High": round(h, 3),
-            "Low": round(l, 3),
             "Ratio": round(ratio, 4),
             "Is Doji": is_doji
         }
@@ -74,40 +69,85 @@ def analyze_ticker(ticker_symbol, threshold):
     except Exception:
         return None
 
-# --- Caricamento e Pulizia File ---
+# --- Funzione 2: Controllo Earnings (Nuova) ---
+def check_earnings_today(ticker_obj):
+    try:
+        # Recupera il calendario
+        cal = ticker_obj.calendar
+        
+        # yfinance restituisce un dizionario. Cerchiamo la chiave 'Earnings Date'
+        # o 'Earnings High' / 'Earnings Low' a seconda della versione.
+        # Solitamente 'Earnings Date' contiene una lista di date.
+        
+        if cal and 'Earnings Date' in cal:
+            earnings_dates = cal['Earnings Date']
+            today = date.today()
+            
+            # Controlliamo se una delle date nella lista corrisponde a oggi
+            for d in earnings_dates:
+                if d == today:
+                    return True
+        return False
+    except Exception:
+        return False
+
+# --- Main Script ---
 uploaded_file = st.file_uploader("Carica lista ticker (.txt)", type="txt")
 
 if uploaded_file is not None:
-    # 1. Leggiamo tutto il contenuto come stringa
+    # Parsing file intelligente (virgole, spazi, newlines)
     content = uploaded_file.getvalue().decode("utf-8")
-    
-    # 2. Sostituiamo le virgole e gli 'a capo' con spazi vuoti
-    # Questo trasforma "A2A.MI, ENI.MI" in "A2A.MI  ENI.MI"
     clean_content = content.replace(',', ' ').replace('\n', ' ').replace('\r', ' ')
-    
-    # 3. Creiamo la lista dividendo per spazi e rimuovendo vuoti
     tickers = [t.strip().upper() for t in clean_content.split(' ') if t.strip()]
     
-    # Mostriamo quanti ne abbiamo trovati
-    st.info(f"Ho rilevato **{len(tickers)}** ticker nel file.")
+    st.info(f"Lista caricata: **{len(tickers)}** ticker.")
     
-    if len(tickers) > 0 and st.button("Avvia Analisi"):
+    if len(tickers) > 0 and st.button("Avvia Scansione Completa"):
         results = []
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        for i, t in enumerate(tickers):
-            data = analyze_ticker(t, threshold)
-            if data and data['Is Doji']:
-                results.append(data)
+        for i, t_symbol in enumerate(tickers):
+            status_text.text(f"Analisi in corso: {t_symbol}...")
+            
+            # Creiamo l'oggetto Ticker una sola volta
+            ticker_obj = yf.Ticker(t_symbol)
+            
+            # 1. Controllo Grafico (Veloce)
+            pattern_data = analyze_ticker_pattern(ticker_obj, threshold)
+            
+            if pattern_data and pattern_data['Is Doji']:
+                # Trovata una Doji!
+                
+                # 2. Controllo Earnings (Lento - lo facciamo solo se richiesto e se è Doji)
+                is_earnings_today = False
+                if filter_earnings:
+                    is_earnings_today = check_earnings_today(ticker_obj)
+                    include_in_results = is_earnings_today
+                else:
+                    # Se il filtro è spento, includiamo tutto
+                    include_in_results = True
+                    is_earnings_today = "N/A" # Non controllato
+
+                if include_in_results:
+                    pattern_data['Ticker'] = t_symbol
+                    pattern_data['Earnings Oggi'] = "✅ SÌ" if is_earnings_today is True else "No/Boh"
+                    results.append(pattern_data)
             
             progress_bar.progress((i + 1) / len(tickers))
         
-        # Risultati
+        status_text.text("Scansione completata.")
+        
+        # Output
         if results:
-            st.success(f"Trovate {len(results)} candele interessanti!")
+            st.success(f"Trovati {len(results)} risultati!")
             df_res = pd.DataFrame(results)
-            # Ordiniamo per Ratio (più basso è, più è Doji perfetta)
-            df_res = df_res.sort_values(by="Ratio")
-            st.dataframe(df_res[["Ticker", "Data Candela", "Open", "Close", "Ratio"]], use_container_width=True)
+            
+            # Riordiniamo le colonne per chiarezza
+            cols = ["Ticker", "Data Candela", "Earnings Oggi", "Open", "Close", "Ratio"]
+            st.dataframe(df_res[cols], use_container_width=True)
         else:
-            st.warning("Nessuna Doji trovata. Prova ad aumentare la tolleranza nello slider a sinistra.")
+            if filter_earnings:
+                st.warning("Nessun ticker trovato che sia SIA una Doji SIA con Earnings oggi.")
+            else:
+                st.warning("Nessuna Doji trovata.")
