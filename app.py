@@ -20,7 +20,8 @@ with st.sidebar:
 def get_analysis(ticker_symbol, threshold):
     try:
         t_obj = yf.Ticker(ticker_symbol)
-        df = t_obj.history(period="1mo", interval="1d") # Prendiamo 1 mese per il grafico
+        # Prendiamo 3 mesi per avere uno storico decente sul grafico
+        df = t_obj.history(period="3mo", interval="1d") 
         
         if df.empty or len(df) < 2:
             return None
@@ -33,21 +34,31 @@ def get_analysis(ticker_symbol, threshold):
         ratio = body / total_range if total_range != 0 else 0
         
         if ratio <= threshold:
-            # Controllo Earnings Domani
+            # Recupero Info Earnings
+            next_earnings_date = "N/A"
             is_earnings_tomorrow = False
             tomorrow = date.today() + timedelta(days=1)
+            
             try:
                 cal = t_obj.calendar
-                if cal and 'Earnings Date' in cal:
-                    is_earnings_tomorrow = any(d.date() == tomorrow for d in cal['Earnings Date'] if hasattr(d, 'date'))
-            except: pass
+                if cal is not None and 'Earnings Date' in cal:
+                    # Prendiamo la prima data disponibile nel calendario
+                    e_dates = cal['Earnings Date']
+                    if e_dates:
+                        # Formattiamo la data per la visualizzazione
+                        next_earnings_date = e_dates[0].strftime('%Y-%m-%d')
+                        # Verifichiamo se domani è uno dei giorni previsti
+                        is_earnings_tomorrow = any(d.date() == tomorrow for d in e_dates if hasattr(d, 'date'))
+            except: 
+                pass
 
             return {
                 "Ticker": ticker_symbol,
                 "Prezzo": round(c, 2),
                 "Ratio": round(ratio, 4),
+                "Data Earnings": next_earnings_date,
                 "Earnings Domani": "🔥 SÌ" if is_earnings_tomorrow else "No",
-                "df": df # Passiamo il dataframe per il grafico
+                "df": df 
             }
         return None
     except:
@@ -71,15 +82,19 @@ if uploaded_file:
                 results.append(res)
             progress_bar.progress((i + 1) / len(tickers))
         
-        # Salviamo i risultati nello stato della sessione per non perderli al cambio selezione
         st.session_state['results'] = results
 
     # --- Visualizzazione Risultati e Grafico ---
     if 'results' in st.session_state and st.session_state['results']:
         res_list = st.session_state['results']
+        # Creiamo il dataframe per la tabella escludendo i dati del grafico
         df_display = pd.DataFrame(res_list).drop(columns=['df'])
         
         st.subheader(f"Trovate {len(res_list)} Doji")
+        
+        # Ordiniamo per mostrare prima chi ha gli utili domani
+        df_display = df_display.sort_values(by="Earnings Domani", ascending=False)
+        
         st.dataframe(df_display, use_container_width=True)
 
         st.divider()
@@ -88,11 +103,10 @@ if uploaded_file:
         st.subheader("📈 Analisi Dettagliata Grafico")
         ticker_to_show = st.selectbox("Seleziona un ticker per vedere il grafico:", [r['Ticker'] for r in res_list])
         
-        # Recuperiamo i dati storici del ticker selezionato
         selected_data = next(item for item in res_list if item["Ticker"] == ticker_to_show)
         df_chart = selected_data['df']
 
-        # Creazione Grafico Candlestick con Plotly
+        # Creazione Grafico Candlestick
         fig = go.Figure(data=[go.Candlestick(
             x=df_chart.index,
             open=df_chart['Open'],
@@ -103,7 +117,7 @@ if uploaded_file:
         )])
 
         fig.update_layout(
-            title=f"Grafico Daily - {ticker_to_show} (Doji Ratio: {selected_data['Ratio']})",
+            title=f"Grafico Daily - {ticker_to_show} (Ratio: {selected_data['Ratio']} | Earnings: {selected_data['Data Earnings']})",
             yaxis_title="Prezzo",
             xaxis_title="Data",
             template="plotly_dark",
