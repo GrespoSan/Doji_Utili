@@ -7,14 +7,14 @@ from datetime import date
 # CONFIG STREAMLIT
 # --------------------------------------------------
 st.set_page_config(
-    page_title="Doji + Earnings Screener (DEBUG)",
+    page_title="Doji Screener Debug – Italia",
     layout="wide"
 )
 
-st.title("📊 Screener Doji – Italia (Debug Avanzato)")
+st.title("📊 Screener Pseudo-Doji – Debug Avanzato")
 st.write(
-    "Mostra tutte le pseudo-doji di ieri anche se gli earnings non sono disponibili su Yahoo.\n"
-    "Permette di controllare manualmente le comunicazioni utili."
+    "Versione super-permissiva: mostra tutte le pseudo-doji di ieri "
+    "anche se le condizioni Dragonfly/Gravestone non scattano."
 )
 
 # --------------------------------------------------
@@ -34,9 +34,9 @@ tickers = uploaded_file.read().decode("utf-8").splitlines()
 tickers = [t.strip().upper() for t in tickers if t.strip()]
 
 # --------------------------------------------------
-# FUNZIONE PSEUDO-DOJI
+# FUNZIONE PSEUDO-DOJI PER DEBUG
 # --------------------------------------------------
-def classify_doji(row):
+def classify_doji_debug(row):
     o, c, h, l = row["Open"], row["Close"], row["High"], row["Low"]
     body = abs(c - o)
     rng = h - l
@@ -48,24 +48,15 @@ def classify_doji(row):
     upper_pct = upper / rng
     lower_pct = lower / rng
 
-    # corpo piccolo massimo 35%
-    if body_pct > 0.35:
-        return None, (body_pct, upper_pct, lower_pct)
-
-    # Dragonfly / Gravestone meno rigidi
-    if lower > upper * 1.1 and body <= lower * 0.7:
-        return "Dragonfly / Pseudo-Doji", (body_pct, upper_pct, lower_pct)
-    if upper > lower * 1.1 and body <= upper * 0.7:
-        return "Gravestone / Pseudo-Doji", (body_pct, upper_pct, lower_pct)
-
-    # Doji generico
-    return "Pseudo-Doji", (body_pct, upper_pct, lower_pct)
+    # Super-permissiva: corpo piccolo ≤50% del range
+    if body_pct <= 0.5:
+        return "Pseudo-Doji", (body_pct, upper_pct, lower_pct)
+    return None, None
 
 # --------------------------------------------------
 # SCREENING DEBUG
 # --------------------------------------------------
 results = []
-debug_rows = []
 
 with st.spinner("🔍 Screening pseudo-doji in corso..."):
     for ticker in tickers:
@@ -75,9 +66,14 @@ with st.spinner("🔍 Screening pseudo-doji in corso..."):
             if df.empty:
                 continue
 
-            # Prendi l'ultima candela disponibile
+            # Mostra ultimi 5 giorni per debug
+            if show_debug:
+                st.subheader(f"Ultimi 5 giorni: {ticker}")
+                st.dataframe(df.tail(5))
+
+            # Prendi l'ultima candela disponibile (di ieri)
             candle = df.iloc[-2]  # di solito ieri
-            doji_type, metrics = classify_doji(candle)
+            doji_type, metrics = classify_doji_debug(candle)
             if not doji_type:
                 continue
 
@@ -122,10 +118,6 @@ if results:
             "TradingView": st.column_config.LinkColumn("TradingView")
         }
     )
-
-    if show_debug:
-        st.subheader("🧪 Debug dettagliato")
-        st.dataframe(df_res, use_container_width=True)
 
 else:
     st.info("Nessuna pseudo-doji trovata nei ticker caricati.")
