@@ -1,20 +1,19 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from datetime import date
 
 # --------------------------------------------------
 # CONFIG STREAMLIT
 # --------------------------------------------------
 st.set_page_config(
-    page_title="Doji Screener Debug – Italia",
+    page_title="Doji + Earnings Screener Italia",
     layout="wide"
 )
 
-st.title("📊 Screener Pseudo-Doji – Debug Avanzato")
+st.title("📊 Screener Pseudo-Doji – Italia")
 st.write(
-    "Versione super-permissiva: mostra tutte le pseudo-doji di ieri "
-    "anche se le condizioni Dragonfly/Gravestone non scattano."
+    "Mostra tutte le pseudo-doji dell'ultima candela disponibile per titoli italiani "
+    "anche se Yahoo non riporta earnings."
 )
 
 # --------------------------------------------------
@@ -34,9 +33,9 @@ tickers = uploaded_file.read().decode("utf-8").splitlines()
 tickers = [t.strip().upper() for t in tickers if t.strip()]
 
 # --------------------------------------------------
-# FUNZIONE PSEUDO-DOJI PER DEBUG
+# FUNZIONE PSEUDO-DOJI
 # --------------------------------------------------
-def classify_doji_debug(row):
+def classify_doji(row):
     o, c, h, l = row["Open"], row["Close"], row["High"], row["Low"]
     body = abs(c - o)
     rng = h - l
@@ -54,7 +53,7 @@ def classify_doji_debug(row):
     return None, None
 
 # --------------------------------------------------
-# SCREENING DEBUG
+# SCREENING
 # --------------------------------------------------
 results = []
 
@@ -66,14 +65,10 @@ with st.spinner("🔍 Screening pseudo-doji in corso..."):
             if df.empty:
                 continue
 
-            # Mostra ultimi 5 giorni per debug
-            if show_debug:
-                st.subheader(f"Ultimi 5 giorni: {ticker}")
-                st.dataframe(df.tail(5))
+            # Prendi l'ultima candela disponibile
+            candle = df.iloc[-1]
 
-            # Prendi l'ultima candela disponibile (di ieri)
-            candle = df.iloc[-2]  # di solito ieri
-            doji_type, metrics = classify_doji_debug(candle)
+            doji_type, metrics = classify_doji(candle)
             if not doji_type:
                 continue
 
@@ -101,7 +96,12 @@ with st.spinner("🔍 Screening pseudo-doji in corso..."):
                 "TradingView": tv_link
             })
 
-        except Exception as e:
+            # DEBUG: ultimi 5 giorni per controllo visivo
+            if show_debug:
+                st.subheader(f"Ultimi 5 giorni: {ticker}")
+                st.dataframe(df.tail(5))
+
+        except Exception:
             continue
 
 # --------------------------------------------------
